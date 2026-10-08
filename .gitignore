@@ -1,0 +1,57 @@
+# --- Secrets / local config (never commit) ---
+config.json
+.env
+.env.*
+!.env.example
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- Virtual environments ---
+venv/
+.venv/
+env/
+
+# --- PyInstaller output ---
+build/
+dist/
+
+# --- Whisper / HuggingFace models (downloaded on first run) ---
+models/
+*.bin
+*.onnx
+*.pt
+.cache/
+
+# --- Recordings, class notes and session data ---
+*.wav
+*.mp3
+*.m4a
+*.flac
+*.ogg
+clase_*.txt
+sessions/
+recordings/
+
+# --- Lecture material ---
+*.pdf
+
+# --- Logs & large files ---
+*.log
+*.zip
+*.7z
+
+# --- OS / editor ---
+Thumbs.db
+desktop.ini
+.DS_Store
+.vscode/
+.idea/
+*.lnk

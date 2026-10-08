@@ -1,0 +1,11 @@
+# Core: GUI, PDF rendering, audio capture, local speech recognition
+PySide6-Essentials==6.11.0
+PyMuPDF==1.27.2.2
+sounddevice==0.5.5
+numpy==2.4.4
+faster-whisper==1.2.1
+
+# Optional LLM backends (the app runs without them, Whisper-only)
+google-generativeai==0.8.6   # Gemini (free tier)
+openai==2.33.0               # OpenAI, and Ollama through its OpenAI-compatible API
+# anthropic                  # uncomment to use Claude
