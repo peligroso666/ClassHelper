@@ -478,6 +478,13 @@ def find_cut(audio: np.ndarray, sr: int = 16000, min_s: float = 20, max_s: float
 def transcribe_audio(model, audio: np.ndarray, prev_text: str = "", beam: int = 3,
                      language: str = "es") -> str:
     """Transcribe un trozo con los parámetros de ClassHelper. Lanza si Whisper falla."""
+    return _dedupe(" ".join(t for _s, _e, t in
+                            transcribe_segments(model, audio, prev_text, beam, language)))
+
+
+def transcribe_segments(model, audio: np.ndarray, prev_text: str = "", beam: int = 3,
+                        language: str = "es") -> list[tuple[float, float, str]]:
+    """Como transcribe_audio, pero devuelve (inicio_s, fin_s, texto) de cada frase."""
     # Contexto = frase neutra + cola corta de lo anterior (continuidad entre trozos)
     prompt = VOCAB_PROMPT
     if prev_text:
@@ -507,8 +514,8 @@ def transcribe_audio(model, audio: np.ndarray, prev_text: str = "", beam: int = 
             continue                              # casi seguro ruido
         if _HALLU_RE.search(t):
             continue
-        parts.append(t)
-    return _dedupe(" ".join(parts))
+        parts.append((seg.start, seg.end, t))
+    return parts
 
 
 _PUNCT = ".,;:¿?¡!«»\"'…"

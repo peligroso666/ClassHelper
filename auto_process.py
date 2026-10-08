@@ -3,10 +3,12 @@ auto_process.py - La biblioteca se prepara sola cada clase.
 
 Al terminar de grabar, ClassHelper encola la clase y hace por su cuenta, en este orden:
 
-  1. Repaso con turbo  → vuelve a transcribir el .wav con large-v3-turbo (mucho mejor
-     que el modelo en directo). A partir de aquí los apuntes vienen del AUDIO.
-  2. Resumen           → con ese texto ya bueno, no con el del directo.
-  3. Tarjetas y test   → material de estudio listo sin pulsar nada.
+  1. Resumen, tarjetas y test con el texto del directo → la clase se puede estudiar
+     en un par de minutos (son llamadas a la IA, no gastan CPU).
+  2. Repaso con turbo  → al final, cuando TODAS las clases de la cola ya tienen su
+     material: vuelve a transcribir el .wav con large-v3-turbo (≈1,3 min de CPU por
+     minuto de audio) y rehace el resumen con ese texto mejor. Si el portátil se apaga
+     a mitad, sigue donde lo dejó. Se puede desactivar ("prepare_turbo": false).
 
 Reglas:
   - Una clase cada vez y nunca mientras se está grabando (turbo se come la CPU).
@@ -55,7 +57,7 @@ def on_battery() -> bool:
 
 import session_store
 from session_store import Session
-from refine import RefineWorker, REFINE_MODEL, SECONDS_PER_AUDIO_SECOND
+from refine import RefineWorker, REFINE_MODEL, SECONDS_PER_AUDIO_SECOND, refine_progress
 from study_ai import StudyAI, AITask
 
 
@@ -75,15 +77,34 @@ def pending_steps(s: Session) -> list[str]:
     """Qué le falta a esta clase (en orden)."""
     st = s.study if isinstance(s.study, dict) else {}
     out = []
-    if s.wav_path and os.path.exists(s.wav_path) and not isinstance(st.get("refined"), dict):
-        out.append("turbo")
     if not (s.summary or "").strip():
         out.append("resumen")
     if not st.get("flashcards"):
         out.append("tarjetas")
     if not (st.get("quiz") or {}).get("questions"):
         out.append("test")
+    if (app_config.load().get("prepare_turbo", True) and s.wav_path
+            and os.path.exists(s.wav_path) and not isinstance(st.get("refined"), dict)):
+        out.append("turbo")
     return out
+
+
+def turbo_minutes(s: Session) -> int:
+    """Minutos de CPU que le quedan al turbo de esta clase (0 si no le toca)."""
+    if "turbo" not in pending_steps(s):
+        return 0
+    try:
+        secs = max(0.0, (os.path.getsize(s.wav_path) - 44) / 32000)
+    except OSError:
+        secs = s.duration_s or 0
+    secs *= 1 - refine_progress(s.wav_path)              # lo ya hecho no se repite
+    return max(1, int(secs * SECONDS_PER_AUDIO_SECOND / 60 + 0.999))
+
+
+def quick_minutes(s: Session) -> int:
+    """Minutos hasta que la clase se puede estudiar (solo llamadas a la IA)."""
+    n = len([x for x in pending_steps(s) if x != "turbo"])
+    return int(n * 25 / 60 + 0.999)
 
 
 def has_text(s: Session) -> bool:
@@ -93,15 +114,7 @@ def has_text(s: Session) -> bool:
 
 def estimate_minutes(s: Session) -> int:
     """Minutos aproximados de todo el proceso (lo que manda es turbo)."""
-    steps = pending_steps(s)
-    secs = 0.0
-    if "turbo" in steps:
-        try:
-            secs += max(0.0, (os.path.getsize(s.wav_path) - 44) / 32000) * SECONDS_PER_AUDIO_SECOND
-        except OSError:
-            secs += (s.duration_s or 0) * SECONDS_PER_AUDIO_SECOND
-    secs += 25 * len([x for x in steps if x != "turbo"])      # cada llamada a la IA
-    return max(1, int(secs / 60 + 0.999))
+    return max(1, quick_minutes(s) + turbo_minutes(s))
 
 
 class AutoProcessor(QObject):
@@ -119,6 +132,7 @@ class AutoProcessor(QObject):
         self.ai = StudyAI(enhancer)
         self.is_recording = is_recording or (lambda: False)
         self._queue: list[str] = []
+        self._turbo_queue: list[str] = []          # turbo, cuando la cola rápida está vacía
         self._current: str | None = None
         self._session: Session | None = None
         self._steps: list[str] = []
@@ -140,10 +154,14 @@ class AutoProcessor(QObject):
         return self._current
 
     def pending_count(self) -> int:
-        return len(self._queue) + (1 if self._current else 0)
+        extra = [x for x in self._turbo_queue if x not in self._queue and x != self._current]
+        return len(self._queue) + len(extra) + (1 if self._current else 0)
+
+    def _queued(self, sid: str) -> bool:
+        return sid == self._current or sid in self._queue or sid in self._turbo_queue
 
     def enqueue(self, session_id: str):
-        if session_id and session_id not in self._queue and session_id != self._current:
+        if session_id and not self._queued(session_id):
             self._queue.append(session_id)
             self.queue_changed.emit(self.pending_count())
         self._next()
@@ -152,7 +170,7 @@ class AutoProcessor(QObject):
         """Encola todas las clases de la biblioteca a las que les falta algo."""
         n = 0
         for s in sorted(session_store.list_sessions(), key=lambda s: s.date):
-            if pending_steps(s) and s.id != self._current and s.id not in self._queue:
+            if pending_steps(s) and not self._queued(s.id):
                 self._queue.append(s.id)
                 n += 1
         if n:
@@ -164,14 +182,20 @@ class AutoProcessor(QObject):
         """Cancela una clase concreta o todo lo pendiente."""
         if session_id is None:
             self._queue.clear()
+            self._turbo_queue.clear()
             session_id = self._current
             if session_id is None:
                 self.queue_changed.emit(0)
                 return
-        elif session_id in self._queue:
-            self._queue.remove(session_id)
+        elif session_id != self._current and (session_id in self._queue
+                                               or session_id in self._turbo_queue):
+            for q in (self._queue, self._turbo_queue):
+                if session_id in q:
+                    q.remove(session_id)
             self.queue_changed.emit(self.pending_count())
             return
+        if session_id in self._turbo_queue:
+            self._turbo_queue.remove(session_id)
         if session_id and session_id == self._current:
             w = self._worker
             if isinstance(w, RefineWorker):
@@ -181,7 +205,7 @@ class AutoProcessor(QObject):
     # ── Motor ────────────────────────────────────────────────────────────
 
     def _next(self):
-        if self._current is not None or not self._queue:
+        if self._current is not None or not (self._queue or self._turbo_queue):
             return
         if self.is_recording():
             self.waiting.emit("hay una clase grabándose")
@@ -191,7 +215,8 @@ class AutoProcessor(QObject):
             self.waiting.emit("esperando al cargador")
             self._retry.start()
             return
-        sid = self._queue.pop(0)
+        rapido = bool(self._queue)
+        sid = self._queue.pop(0) if rapido else self._turbo_queue.pop(0)
         _keep_awake(True)
         try:
             s = session_store.load_session(session_store.session_path(sid))
@@ -201,6 +226,11 @@ class AutoProcessor(QObject):
             return
         self._current, self._session = sid, s
         self._steps = pending_steps(s)
+        if rapido and "turbo" in self._steps:
+            # Primero que TODAS las clases se puedan estudiar; turbo después
+            self._steps.remove("turbo")
+            if sid not in self._turbo_queue:
+                self._turbo_queue.append(sid)
         self._done = []
         self._retried = {}
         if not self._steps:
@@ -370,6 +400,6 @@ class AutoProcessor(QObject):
         if sid and not cancelled:
             self.finished.emit(sid, done)
         self.queue_changed.emit(self.pending_count())
-        if not self._queue:
+        if not (self._queue or self._turbo_queue):
             _keep_awake(False)                    # cola vacía: el PC ya puede dormir
         QTimer.singleShot(0, self._next)

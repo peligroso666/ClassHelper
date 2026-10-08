@@ -36,7 +36,7 @@ import app_config
 from settings_dialog import SettingsDialog
 import session_store
 from library_panel import LibraryPanel
-from auto_process import AutoProcessor, pending_steps, estimate_minutes
+from auto_process import AutoProcessor, pending_steps, quick_minutes, turbo_minutes
 from study_panel import StudyPanel
 
 
@@ -730,10 +730,10 @@ class MainWindow(QMainWindow):
             return
         self.auto.enqueue(session_id)
         if avisar:
-            mins = estimate_minutes(s)
             self.statusBar().showMessage(
-                f"  ⚙ Preparando los apuntes desde el audio (turbo, resumen y material) · "
-                f"unos {mins} min · puedes seguir usando la app", 12000)
+                f"  ⚙ Preparando: resumen, tarjetas y test en ~{max(1, quick_minutes(s))} min"
+                + (f"; luego turbo (~{turbo_minutes(s)} min, sigue donde iba si apagas)"
+                   if turbo_minutes(s) else "") + " · puedes seguir usando la app", 12000)
 
     def _prepare_all(self):
         n = self.auto.enqueue_all_pending()

@@ -650,14 +650,19 @@ class LibraryPanel(QWidget):
         from PySide6.QtGui import QAction
         import os
         import app_config
-        from auto_process import pending_steps, estimate_minutes
+        from auto_process import pending_steps, quick_minutes, turbo_minutes
 
         cfg = app_config.load()
         menu = QMenu(self)
         pend = [s for s in self._sessions if pending_steps(s)]
-        mins = sum(estimate_minutes(s) for s in pend)
-        a = QAction(f"Preparar todo lo pendiente ({len(pend)} clase{'s' if len(pend) != 1 else ''}"
-                    + (f", ~{mins} min)" if pend else ")"), menu)
+        rapido = sum(quick_minutes(s) for s in pend)
+        turbo = sum(turbo_minutes(s) for s in pend)
+        txt = f"Preparar todo lo pendiente ({len(pend)} clase{'s' if len(pend) != 1 else ''})"
+        if pend:
+            txt += f"  ·  para estudiar: ~{max(1, rapido)} min"
+            if turbo:
+                txt += f"  ·  turbo después: ~{turbo / 60:.1f} h"
+        a = QAction(txt, menu)
         a.setEnabled(bool(pend))
         a.triggered.connect(self.prepare_all_requested.emit)
         menu.addAction(a)
@@ -675,6 +680,7 @@ class LibraryPanel(QWidget):
 
         toggle("prepare_on_finish", True, "Preparar al terminar cada clase")
         toggle("prepare_ac_only", False, "Solo con el cargador enchufado")
+        toggle("prepare_turbo", True, "Repasar también con turbo (mejor texto, lento; sigue donde iba)")
 
         sub = menu.addMenu("Núcleos para turbo")
         total = os.cpu_count() or 8
